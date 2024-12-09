@@ -30,7 +30,17 @@ import core, {
 import { PlatformError, unknownStatus } from '@hcengineering/platform'
 import { type DomainHelperOperations } from '@hcengineering/server-core'
 import postgres from 'postgres'
-import { getDocFieldsByDomains, getSchema, translateDomain } from './schemas'
+import {
+  addSchema,
+  type DataType,
+  getDocFieldsByDomains,
+  getIndex,
+  getSchema,
+  getSchemaAndFields,
+  type Schema,
+  type SchemaAndFields,
+  translateDomain
+} from './schemas'
 
 const connections = new Map<string, PostgresClientReferenceImpl>()
 
@@ -42,6 +52,7 @@ process.on('exit', () => {
 })
 
 const clientRefs = new Map<string, ClientRef>()
+const loadedDomains = new Set<string>()
 
 export async function retryTxn (
   pool: postgres.Sql,
@@ -53,44 +64,100 @@ export async function retryTxn (
   })
 }
 
-export async function createTable (client: postgres.Sql, domains: string[]): Promise<void> {
-  if (domains.length === 0) {
+export const NumericTypes = [
+  core.class.TypeNumber,
+  core.class.TypeTimestamp,
+  core.class.TypeDate,
+  core.class.Collection
+]
+
+export async function createTables (client: postgres.Sql, domains: string[]): Promise<void> {
+  const filtered = domains.filter((d) => !loadedDomains.has(d))
+  if (filtered.length === 0) {
     return
   }
-  const mapped = domains.map((p) => translateDomain(p))
+  const mapped = filtered.map((p) => translateDomain(p))
+  const inArr = mapped.map((it) => `'${it}'`).join(', ')
+  const tables = await client.unsafe(`
+    SELECT table_name 
+    FROM information_schema.tables 
+    WHERE table_name IN (${inArr})
+  `)
+
+  const exists = new Set(tables.map((it) => it.table_name))
+
   await retryTxn(client, async (client) => {
     for (const domain of mapped) {
-      const schema = getSchema(domain)
-      const fields: string[] = []
-      for (const key in schema) {
-        const val = schema[key]
-        fields.push(`"${key}" ${val[0]} ${val[1] ? 'NOT NULL' : ''}`)
+      if (exists.has(domain)) {
+        await getTableSchema(client, domain)
+      } else {
+        await createTable(client, domain)
       }
-      const colums = fields.join(', ')
-      const res = await client.unsafe(`CREATE TABLE IF NOT EXISTS ${domain} (
-          "workspaceId" text NOT NULL,
-          ${colums}, 
-          data JSONB NOT NULL,
-          PRIMARY KEY("workspaceId", _id)
-        )`)
-      if (res.count > 0) {
-        if (schema.attachedTo !== undefined) {
-          await client.unsafe(`
-            CREATE INDEX ${domain}_attachedTo ON ${domain} ("attachedTo")
-          `)
-        }
-        await client.unsafe(`
-          CREATE INDEX ${domain}_class ON ${domain} (_class)
-        `)
-        await client.unsafe(`
-          CREATE INDEX ${domain}_space ON ${domain} (space)
-        `)
-        await client.unsafe(`
-          CREATE INDEX ${domain}_idxgin ON ${domain} USING GIN (data)
-        `)
-      }
+      loadedDomains.add(domain)
     }
   })
+}
+
+async function getTableSchema (client: postgres.Sql, domain: string): Promise<void> {
+  const res = await client.unsafe(`SELECT column_name, data_type, is_nullable
+    FROM information_schema.columns
+    WHERE table_name = '${domain}' and table_schema = 'public' ORDER BY ordinal_position ASC;
+  `)
+
+  const schema: Schema = {}
+  for (const column of res) {
+    if (column.column_name === 'workspaceId' || column.column_name === 'data') {
+      continue
+    }
+    schema[column.column_name] = {
+      type: parseDataType(column.data_type),
+      notNull: column.is_nullable === 'NO',
+      index: false
+    }
+  }
+
+  addSchema(domain, schema)
+}
+
+function parseDataType (type: string): DataType {
+  switch (type) {
+    case 'text':
+      return 'text'
+    case 'bigint':
+      return 'bigint'
+    case 'boolean':
+      return 'bool'
+    case 'ARRAY':
+      return 'text[]'
+  }
+  return 'text'
+}
+
+async function createTable (client: postgres.Sql, domain: string): Promise<void> {
+  const schema = getSchema(domain)
+  const fields: string[] = []
+  for (const key in schema) {
+    const val = schema[key]
+    fields.push(`"${key}" ${val.type} ${val.notNull ? 'NOT NULL' : ''}`)
+  }
+  const colums = fields.join(', ')
+  const res = await client.unsafe(`CREATE TABLE IF NOT EXISTS ${domain} (
+      "workspaceId" text NOT NULL,
+      ${colums}, 
+      data JSONB NOT NULL,
+      PRIMARY KEY("workspaceId", _id)
+    )`)
+  if (res.count > 0) {
+    for (const key in schema) {
+      const val = schema[key]
+      if (val.index) {
+        await client.unsafe(`
+          CREATE INDEX ${domain}_${key} ON ${domain} ${getIndex(val)} ("${key}")
+        `)
+      }
+      fields.push(`"${key}" ${val.type} ${val.notNull ? 'NOT NULL' : ''}`)
+    }
+  }
 }
 
 /**
@@ -136,8 +203,7 @@ class PostgresClientReferenceImpl {
       void (async () => {
         this.onclose()
         const cl = await this.client
-        await cl.end()
-        console.log('Closed postgres connection')
+        await cl.end({ timeout: 1 })
       })()
     }
   }
@@ -203,24 +269,60 @@ export function getDBClient (connectionString: string, database?: string): Postg
   return new ClientRef(existing)
 }
 
-export function convertDoc<T extends Doc> (domain: string, doc: T, workspaceId: string): DBDoc {
+export function convertDoc<T extends Doc> (
+  domain: string,
+  doc: T,
+  workspaceId: string,
+  schemaAndFields?: SchemaAndFields
+): DBDoc {
   const extractedFields: Doc & Record<string, any> = {
     _id: doc._id,
     space: doc.space,
     createdBy: doc.createdBy,
     modifiedBy: doc.modifiedBy,
     modifiedOn: doc.modifiedOn,
-    createdOn: doc.createdOn,
-    _class: doc._class
+    createdOn: doc.createdOn ?? doc.modifiedOn,
+    _class: doc._class,
+    '%hash%': (doc as any)['%hash%'] ?? null
   }
   const remainingData: Partial<T> = {}
 
+  const extractedFieldsKeys = new Set(Object.keys(extractedFields))
+
+  schemaAndFields = schemaAndFields ?? getSchemaAndFields(domain)
+
   for (const key in doc) {
-    if (Object.keys(extractedFields).includes(key)) continue
-    if (getDocFieldsByDomains(domain).includes(key)) {
+    if (extractedFieldsKeys.has(key)) {
+      continue
+    }
+    if (schemaAndFields.domainFields.has(key)) {
       extractedFields[key] = doc[key]
     } else {
       remainingData[key] = doc[key]
+    }
+  }
+
+  // Check if some fields are missing
+  for (const [key, _type] of Object.entries(schemaAndFields.schema)) {
+    if (_type.notNull) {
+      if (!(key in doc) || (doc as any)[key] == null) {
+        // We missing required field, and we need to add a dummy value for it.
+        // Null value is not allowed
+        switch (_type.type) {
+          case 'bigint':
+            extractedFields[key] = 0
+            break
+          case 'bool':
+            extractedFields[key] = false
+            break
+          case 'text':
+            extractedFields[key] = ''
+            break
+          case 'text[]':
+            extractedFields[key] = []
+            break
+        }
+      }
     }
   }
 
@@ -244,14 +346,22 @@ export function inferType (val: any): string {
   }
   if (Array.isArray(val)) {
     const type = inferType(val[0])
-    return type + '[]'
+    if (type !== '') {
+      return type + '[]'
+    }
+  }
+  if (typeof val === 'object') {
+    if (val instanceof Date) {
+      return '::text'
+    }
+    return '::jsonb'
   }
   return ''
 }
 
 export function parseUpdate<T extends Doc> (
-  domain: string,
-  ops: DocumentUpdate<T> | MixinUpdate<Doc, T>
+  ops: DocumentUpdate<T> | MixinUpdate<Doc, T>,
+  schemaFields: SchemaAndFields
 ): {
     extractedFields: Partial<T>
     remainingData: Partial<T>
@@ -260,20 +370,20 @@ export function parseUpdate<T extends Doc> (
   const remainingData: Partial<T> = {}
 
   for (const key in ops) {
-    if (key === '$push' || key === '$pull') {
-      const val = (ops as any)[key]
+    const val = (ops as any)[key]
+    if (key.startsWith('$')) {
       for (const k in val) {
-        if (getDocFieldsByDomains(domain).includes(k)) {
+        if (schemaFields.domainFields.has(k)) {
           ;(extractedFields as any)[k] = val[key]
         } else {
           ;(remainingData as any)[k] = val[key]
         }
       }
     } else {
-      if (getDocFieldsByDomains(domain).includes(key)) {
-        ;(extractedFields as any)[key] = (ops as any)[key]
+      if (schemaFields.domainFields.has(key)) {
+        ;(extractedFields as any)[key] = val
       } else {
-        ;(remainingData as any)[key] = (ops as any)[key]
+        ;(remainingData as any)[key] = val
       }
     }
   }
@@ -285,6 +395,7 @@ export function parseUpdate<T extends Doc> (
 }
 
 export function escapeBackticks (str: string): string {
+  if (typeof str !== 'string') return str
   return str.replaceAll("'", "''")
 }
 
@@ -330,8 +441,13 @@ export class DBCollectionHelper implements DomainHelperOperations {
   }
 }
 
-export function parseDocWithProjection<T extends Doc> (doc: DBDoc, projection: Projection<T> | undefined): T {
+export function parseDocWithProjection<T extends Doc> (
+  doc: DBDoc,
+  domain: string,
+  projection?: Projection<T> | undefined
+): T {
   const { workspaceId, data, ...rest } = doc
+  const schema = getSchema(domain)
   for (const key in rest) {
     if ((rest as any)[key] === 'NULL' || (rest as any)[key] === null) {
       if (key === 'attachedTo') {
@@ -340,8 +456,7 @@ export function parseDocWithProjection<T extends Doc> (doc: DBDoc, projection: P
       } else {
         ;(rest as any)[key] = null
       }
-    }
-    if (key === 'modifiedOn' || key === 'createdOn') {
+    } else if (schema[key] !== undefined && schema[key].type === 'bigint') {
       ;(rest as any)[key] = Number.parseInt((rest as any)[key])
     }
   }
@@ -361,7 +476,7 @@ export function parseDocWithProjection<T extends Doc> (doc: DBDoc, projection: P
   return res
 }
 
-export function parseDoc<T extends Doc> (doc: DBDoc): T {
+export function parseDoc<T extends Doc> (doc: DBDoc, schema: Schema): T {
   const { workspaceId, data, ...rest } = doc
   for (const key in rest) {
     if ((rest as any)[key] === 'NULL' || (rest as any)[key] === null) {
@@ -371,8 +486,7 @@ export function parseDoc<T extends Doc> (doc: DBDoc): T {
       } else {
         ;(rest as any)[key] = null
       }
-    }
-    if (key === 'modifiedOn' || key === 'createdOn') {
+    } else if (schema[key] !== undefined && schema[key].type === 'bigint') {
       ;(rest as any)[key] = Number.parseInt((rest as any)[key])
     }
   }
@@ -402,6 +516,6 @@ export interface JoinProps {
   toAlias: string // alias for the table
   toField: string // field to join on
   isReverse: boolean
-  toClass: Ref<Class<Doc>>
+  toClass?: Ref<Class<Doc>>
   classes?: Ref<Class<Doc>>[] // filter by classes
 }

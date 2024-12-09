@@ -34,10 +34,13 @@
       "request": "launch",
       "args": ["src/__start.ts"],
       "env": {
-        "ELASTIC_URL": "http://localhost:9200",
-        "MONGO_URL": "mongodb://localhost:27017",
-        "DB_URL": "mongodb://localhost:27017",
+        // "FULLTEXT_URL": "http://localhost:4700",
+        "FULLTEXT_URL": "http://host.docker.internal:4702",
+        // "MONGO_URL": "mongodb://localhost:27017",
+        // "DB_URL": "mongodb://localhost:27017",
         // "DB_URL": "postgresql://postgres:example@localhost:5432",
+        "DB_URL": "postgresql://root@host.docker.internal:26257/defaultdb?sslmode=disable",
+        "SERVER_PORT": "3332",
         "APM_SERVER_URL2": "http://localhost:8200",
         "METRICS_CONSOLE": "false",
         "METRICS_FILE": "${workspaceRoot}/metrics.txt", // Show metrics in console evert 30 seconds.,
@@ -55,7 +58,8 @@
         // "VERSION": "0.6.289",
         "ELASTIC_INDEX_NAME": "local_storage_index",
         "UPLOAD_URL": "/files",
-        "AI_BOT_URL": "http://localhost:4010"
+        "AI_BOT_URL": "http://localhost:4010",
+        "STATS_URL": "http://host.docker.internal:4900"
       },
       "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
       "runtimeVersion": "20",
@@ -63,6 +67,35 @@
       "outputCapture": "std",
       "sourceMaps": true,
       "cwd": "${workspaceRoot}/pods/server",
+      "protocol": "inspector"
+    },
+    {
+      "name": "Debug Fulltext",
+      "type": "node",
+      "request": "launch",
+      "args": ["src/index.ts"],
+      "env": {
+        // "PORT": "4700",// For mongo
+        "PORT": "4702", // for cockroach
+        "FULLTEXT_DB_URL": "http://localhost:9200",
+        // "DB_URL": "mongodb://localhost:27017",
+        // "DB_URL": "postgresql://postgres:example@localhost:5432",
+        "DB_URL": "postgresql://root@host.docker.internal:26257/defaultdb?sslmode=disable",
+        "STORAGE_CONFIG": "minio|localhost?accessKey=minioadmin&secretKey=minioadmin",
+        "SERVER_SECRET": "secret",
+        "REKONI_URL": "http://localhost:4004",
+        "MODEL_JSON": "${workspaceRoot}/models/all/bundle/model.json",
+        "REGION":"pg",
+        "ELASTIC_INDEX_NAME": "local_storage_index",
+        "STATS_URL":"http://host.docker.internal:4900",
+        "ACCOUNTS_URL": "http://localhost:3000",
+      },
+      "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+      "runtimeVersion": "20",
+      "showAsyncStacks": true,
+      "outputCapture": "std",
+      "sourceMaps": true,
+      "cwd": "${workspaceRoot}/pods/fulltext",
       "protocol": "inspector"
     },
     {
@@ -86,7 +119,7 @@
         // "WS_LIVENESS_DAYS": "1",
         "MINIO_ACCESS_KEY": "minioadmin",
         "MINIO_SECRET_KEY": "minioadmin",
-        "MINIO_ENDPOINT": "localhost",
+        "MINIO_ENDPOINT": "localhost"
         // "DISABLE_SIGNUP": "true",
         // "INIT_SCRIPT_URL": "https://raw.githubusercontent.com/hcengineering/init/main/script.yaml",
         // "INIT_WORKSPACE": "onboarding",
@@ -105,7 +138,7 @@
       "args": ["src/__start.ts"],
       "env": {
         "PORT": "4900",
-        "SERVER_SECRET": "secret",
+        "SERVER_SECRET": "secret"
       },
       "runtimeVersion": "20",
       "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
@@ -224,7 +257,7 @@
       "name": "Debug backup tool",
       "type": "node",
       "request": "launch",
-      "args": ["src/__start.ts", "backup", "../temp/backup-test", "platform", "--force"],
+      "args": ["src/__start.ts", "backup-restore", "../../../hardware/dump/alex-staff-agency", "w-haiodo-alex-staff-c-673ee7ab-87df5406ea-2b8b4d", "--skip", "blob"],
       "env": {
         "MINIO_ACCESS_KEY": "minioadmin",
         "MINIO_SECRET_KEY": "minioadmin",
@@ -241,7 +274,7 @@
       "protocol": "inspector",
       "outputCapture": "std",
       "runtimeVersion": "20",
-      "showAsyncStacks": true,
+      "showAsyncStacks": true
     },
     {
       "name": "Debug tool upgrade",
@@ -255,7 +288,36 @@
         "MINIO_ENDPOINT": "localhost:9000",
         "TRANSACTOR_URL": "ws://localhost:3333",
         "MONGO_URL": "mongodb://localhost:27017",
+        "DB_URL": "mongodb://localhost:27017",
         "ACCOUNTS_URL": "http://localhost:3000",
+        "TELEGRAM_DATABASE": "telegram-service",
+        "ELASTIC_URL": "http://localhost:9200",
+        "REKONI_URL": "http://localhost:4004",
+        "MODEL_VERSION": "0.6.287"
+      },
+      "runtimeVersion": "20",
+      "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+      "sourceMaps": true,
+      "outputCapture": "std",
+      "cwd": "${workspaceRoot}/dev/tool"
+    },
+    {
+      "name": "Debug tool upgrade PG(Cockroach)",
+      "type": "node",
+      "request": "launch",
+      "args": ["src/__start.ts", "upgrade-workspace", "w-haiodo-alex-staff-c-673ee7ab-87df5406ea-2b8b4d" ],
+      "env": {
+        "SERVER_SECRET": "secret",
+        "MINIO_ACCESS_KEY": "minioadmin",
+        "MINIO_SECRET_KEY": "minioadmin",
+        "MINIO_ENDPOINT": "localhost:9000",
+        "TRANSACTOR_URL": "ws://localhost:3332",
+        "ACCOUNTS_URL": "http://localhost:3000",
+        "ACCOUNT_DB_URL": "mongodb://localhost:27017",
+        // "ACCOUNT_DB_URL": "postgresql://postgres:example@localhost:5433",
+        // "DB_URL": "postgresql://postgres:example@localhost:5433",
+        "DB_URL": "postgresql://root@host.docker.internal:26257/defaultdb?sslmode=disable",
+        "MONGO_URL": "mongodb://localhost:27017",
         "TELEGRAM_DATABASE": "telegram-service",
         "ELASTIC_URL": "http://localhost:9200",
         "REKONI_URL": "http://localhost:4004",
@@ -299,16 +361,40 @@
         "ACCOUNTS_URL": "http://localhost:3000",
         "STORAGE": "minio|localhost?accessKey=minioadmin&secretKey=minioadmin",
         "WORKSPACE_STORAGE": "minio|localhost?accessKey=minioadmin&secretKey=minioadmin",
-        "MONGO_URL": "mongodb://localhost:27017",
+        "DB_URL": "mongodb://localhost:27017",
+        "MODEL_JSON": "${workspaceRoot}/models/all/bundle/model.json",
         "SECRET": "secret",
+        "REGION": "pg",
         "BUCKET_NAME":"backups",
-        "INTERVAL":"30",
+        "INTERVAL":"30"
       },
       "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
       "showAsyncStacks": true,
       "sourceMaps": true,
       "outputCapture": "std",
       "cwd": "${workspaceRoot}/pods/backup",
+      "protocol": "inspector"
+    },
+    {
+      "name": "Debug archive tool",
+      "type": "node",
+      "request": "launch",
+      "args": ["src/__start.ts", "archive-workspaces-mongo", "--timeout", "7", "--remove"],
+      "env": {
+        "ACCOUNTS_URL": "http://localhost:3000",
+        "STORAGE": "minio|localhost?accessKey=minioadmin&secretKey=minioadmin",
+        "WORKSPACE_STORAGE": "minio|localhost?accessKey=minioadmin&secretKey=minioadmin",
+        "MONGO_URL": "mongodb://localhost:27017",
+        "DB_URL": "mongodb://localhost:27017",
+        "SERVER_SECRET": "secret",
+        "SECRET": "secret",
+        "BUCKET_NAME":"backups"
+      },
+      "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+      "showAsyncStacks": true,
+      "sourceMaps": true,
+      "outputCapture": "std",
+      "cwd": "${workspaceRoot}/dev/tool",
       "protocol": "inspector"
     },
     {
@@ -331,7 +417,8 @@
         "MINIO_SECRET_KEY": "minioadmin",
         "PLATFORM_OPERATION_LOGGING": "true",
         "FRONT_URL": "http://localhost:8080",
-        "PORT": "3500"
+        "PORT": "3500",
+        "STATS_URL": "http://host.docker.internal:4900"
       },
       "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
       "sourceMaps": true,
@@ -470,7 +557,7 @@
         "PASSWORD": "password",
         "AVATAR_PATH": "./assets/avatar.png",
         "AVATAR_CONTENT_TYPE": ".png",
-        "OPENAI_API_KEY": "token"
+        "LOVE_ENDPOINT": "http://localhost:8096"
       },
       "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
       "sourceMaps": true,
@@ -517,7 +604,7 @@
       "args": ["src/__start.ts", "import-notion-to-teamspace", "/home/anna/work/notion/natalya/Export-fad9ecb4-a1a5-4623-920d-df32dd423743", "-u", "user1", "-pw", "1234", "-ws", "ws5", "-ts", "notion", ],
       // "args": ["src/__start.ts", "import-notion-with-teamspaces", "/home/anna/work/notion/natalya/Export-fad9ecb4-a1a5-4623-920d-df32dd423743", "-u", "user1", "-pw", "1234", "-ws", "ws1"],
       "env": {
-        "FRONT_URL": "http://localhost:8087",
+        "FRONT_URL": "http://localhost:8087"
       },
       "runtimeVersion": "20",
       "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
@@ -529,9 +616,23 @@
       "name": "Debug ClickUp import",
       "type": "node",
       "request": "launch",
-      "args": ["src/__start.ts", "import-clickup-tasks", "/home/anna/work/clickup/aleksandr/debug/mentions.csv", "-u", "user1", "-pw", "1234", "-ws", "ws5"],
+      "args": ["src/__start.ts", "import-clickup-tasks", "/home/anna/work/clickup/aleksandr/debug/mentions.csv", "-u", "user1", "-pw", "1234", "-ws", "ws10"],
       "env": {
         "FRONT_URL": "http://localhost:8087",
+      },
+      "runtimeVersion": "20",
+      "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+      "sourceMaps": true,
+      "outputCapture": "std",
+      "cwd": "${workspaceRoot}/dev/import-tool"
+    },
+    {
+      "name": "Debug Huly import",
+      "type": "node",
+      "request": "launch",
+      "args": ["src/__start.ts", "import", "/home/anna/xored/huly/platform/dev/import-tool/src/huly/example-workspace", "-u", "user1", "-pw", "1234", "-ws", "ws12"],
+      "env": {
+        "FRONT_URL": "http://localhost:8087"
       },
       "runtimeVersion": "20",
       "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],

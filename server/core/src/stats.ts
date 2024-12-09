@@ -99,48 +99,58 @@ export function initStatisticsContext (
       console.info('storing measurements into local file', metricsFile)
     }
     let oldMetricsValue = ''
-    const token = generateToken(systemAccountEmail, { name: '' }, { service: 'true' })
     const serviceId = encodeURIComponent(os.hostname() + '-' + serviceName)
 
-    const intTimer = setInterval(() => {
-      if (metricsFile !== undefined || ops?.logConsole === true) {
-        const val = metricsToString(metricsContext.metrics, serviceName, 140)
-        if (val !== oldMetricsValue) {
-          oldMetricsValue = val
-          if (metricsFile !== undefined) {
-            writeFile(metricsFile, val).catch((err) => {
-              console.error(err)
-            })
-          }
-          if (ops?.logConsole === true) {
-            console.info('METRICS:', val)
-          }
+    const handleError = (err: any): void => {
+      errorToSend++
+      if (errorToSend % 2 === 0) {
+        if (err.code !== 'UND_ERR_SOCKET') {
+          console.error(err)
         }
       }
-      if (statsUrl !== undefined) {
-        const data: ServiceStatistics = {
-          serviceName,
-          cpu: getCPUInfo(),
-          memory: getMemoryInfo(),
-          stats: metricsContext.metrics,
-          workspaces: ops?.getUsers?.()
-        }
+    }
 
-        void fetch(
-          concatLink(statsUrl, '/api/v1/statistics') + `/?token=${encodeURIComponent(token)}&name=${serviceId}`,
-          {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(data)
+    const intTimer = setInterval(() => {
+      try {
+        if (metricsFile !== undefined || ops?.logConsole === true) {
+          const val = metricsToString(metricsContext.metrics, serviceName, 140)
+          if (val !== oldMetricsValue) {
+            oldMetricsValue = val
+            if (metricsFile !== undefined) {
+              void writeFile(metricsFile, val).catch((err) => {
+                console.error(err)
+              })
+            }
+            if (ops?.logConsole === true) {
+              console.info('METRICS:', val)
+            }
           }
-        ).catch((err) => {
-          errorToSend++
-          if (errorToSend % 20 === 0) {
-            console.error(err)
+        }
+        if (statsUrl !== undefined) {
+          const token = generateToken(systemAccountEmail, { name: '' }, { service: 'true' })
+          const data: ServiceStatistics = {
+            serviceName,
+            cpu: getCPUInfo(),
+            memory: getMemoryInfo(),
+            stats: metricsContext.metrics,
+            workspaces: ops?.getUsers?.()
           }
-        })
+
+          const statData = JSON.stringify(data)
+
+          void fetch(
+            concatLink(statsUrl, '/api/v1/statistics') + `/?token=${encodeURIComponent(token)}&name=${serviceId}`,
+            {
+              method: 'PUT',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: statData
+            }
+          ).catch(handleError)
+        }
+      } catch (err: any) {
+        handleError(err)
       }
     }, METRICS_UPDATE_INTERVAL)
 

@@ -47,6 +47,8 @@ const consoleLogger = (logParams: Record<string, any>): MeasureLogger => ({
 
 const noParamsLogger = consoleLogger({})
 
+const nullPromise = Promise.resolve()
+
 /**
  * @public
  */
@@ -62,22 +64,7 @@ export class MeasureMetricsContext implements MeasureContext {
   st = Date.now()
   contextData: object = {}
   private done (value?: number, override?: boolean): void {
-    updateMeasure(
-      this.metrics,
-      this.st,
-      this.params,
-      this.fullParams,
-      (spend) => {
-        this.logger.logOperation(this.name, spend, {
-          ...this.params,
-          ...(typeof this.fullParams === 'function' ? this.fullParams() : this.fullParams),
-          ...this.fullParams,
-          ...(this.logParams ?? {})
-        })
-      },
-      value,
-      override
-    )
+    updateMeasure(this.metrics, this.st, this.params, this.fullParams, (spend) => {}, value, override)
   }
 
   constructor (
@@ -127,7 +114,6 @@ export class MeasureMetricsContext implements MeasureContext {
       this.logParams
     )
     result.id = this.id
-    result.onEnd = this.onEnd.bind(this)
     result.contextData = this.contextData
     return result
   }
@@ -142,12 +128,15 @@ export class MeasureMetricsContext implements MeasureContext {
     let needFinally = true
     try {
       const value = op(c)
-      if (value != null && value instanceof Promise) {
+      if (value instanceof Promise) {
         needFinally = false
         return value.finally(() => {
           c.end()
         })
       } else {
+        if (value == null) {
+          return nullPromise as Promise<T>
+        }
         return Promise.resolve(value)
       }
     } finally {
@@ -200,8 +189,6 @@ export class MeasureMetricsContext implements MeasureContext {
   end (): void {
     this.done()
   }
-
-  async onEnd (ctx: MeasureContext): Promise<void> {}
 }
 
 /**
@@ -230,7 +217,10 @@ export function registerOperationLog (ctx: MeasureContext): { opLogMetrics?: Met
   }
   const op: OperationLog = { start: Date.now(), ops: [], end: -1 }
   let opLogMetrics: Metrics | undefined
-  ctx.id = generateId()
+
+  if (ctx.id === undefined) {
+    ctx.id = 'op_' + generateId()
+  }
   if (ctx.metrics !== undefined) {
     if (ctx.metrics.opLog === undefined) {
       ctx.metrics.opLog = {}

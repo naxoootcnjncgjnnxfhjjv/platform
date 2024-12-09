@@ -20,7 +20,7 @@ import {
 import { getMongoClient, getWorkspaceMongoDB } from '@hcengineering/mongo'
 import {
   convertDoc,
-  createTable,
+  createTables,
   getDBClient,
   getDocFieldsByDomains,
   retryTxn,
@@ -68,9 +68,11 @@ async function moveWorkspace (
   pgClient: postgres.Sql,
   ws: Workspace,
   region: string,
-  include?: Set<string>
+  include?: Set<string>,
+  force = false
 ): Promise<void> {
   try {
+    console.log('move workspace', ws.workspaceName ?? ws.workspace)
     const wsId = getWorkspaceId(ws.workspace)
     const mongoDB = getWorkspaceMongoDB(mongo, wsId)
     const collections = await mongoDB.collections()
@@ -79,7 +81,7 @@ async function moveWorkspace (
       tables = tables.filter((t) => include.has(t))
     }
 
-    await createTable(pgClient, tables)
+    await createTables(pgClient, tables)
     const token = generateToken(systemAccountEmail, wsId)
     const endpoint = await getTransactorEndpoint(token, 'external')
     const connection = (await connect(endpoint, wsId, undefined, {
@@ -102,24 +104,43 @@ async function moveWorkspace (
         insertFields.push(field)
       }
       while (true) {
-        while (docs.length < 50000) {
+        const toRemove: string[] = []
+        while (docs.length < 5000) {
           const doc = (await cursor.next()) as Doc | null
           if (doc === null) break
-          if (currentIds.has(doc._id)) continue
+          if (currentIds.has(doc._id)) {
+            if (force) {
+              toRemove.push(doc._id)
+            } else {
+              continue
+            }
+          }
           docs.push(doc)
+        }
+        while (toRemove.length > 0) {
+          const part = toRemove.splice(0, 100)
+          await retryTxn(pgClient, async (client) => {
+            await client.unsafe(
+              `DELETE FROM ${translateDomain(domain)} WHERE "workspaceId" = '${ws.workspace}' AND _id IN (${part.map((c) => `'${c}'`).join(', ')})`
+            )
+          })
         }
         if (docs.length === 0) break
         while (docs.length > 0) {
-          const part = docs.splice(0, 500)
+          const part = docs.splice(0, 100)
           const values: DBDoc[] = []
           for (let i = 0; i < part.length; i++) {
             const doc = part[i]
             const d = convertDoc(domain, doc, ws.workspace)
             values.push(d)
           }
-          await retryTxn(pgClient, async (client) => {
-            await client`INSERT INTO ${client(translateDomain(domain))} ${client(values, insertFields)}`
-          })
+          try {
+            await retryTxn(pgClient, async (client) => {
+              await client`INSERT INTO ${client(translateDomain(domain))} ${client(values, insertFields)}`
+            })
+          } catch (err) {
+            console.log('Error when insert', domain, err)
+          }
         }
       }
     }
@@ -138,7 +159,8 @@ export async function moveWorkspaceFromMongoToPG (
   dbUrl: string | undefined,
   ws: Workspace,
   region: string,
-  include?: Set<string>
+  include?: Set<string>,
+  force?: boolean
 ): Promise<void> {
   if (dbUrl === undefined) {
     throw new Error('dbUrl is required')
@@ -148,7 +170,7 @@ export async function moveWorkspaceFromMongoToPG (
   const pg = getDBClient(dbUrl)
   const pgClient = await pg.getClient()
 
-  await moveWorkspace(accountDb, mongo, pgClient, ws, region, include)
+  await moveWorkspace(accountDb, mongo, pgClient, ws, region, include, force)
   pg.close()
   client.close()
 }

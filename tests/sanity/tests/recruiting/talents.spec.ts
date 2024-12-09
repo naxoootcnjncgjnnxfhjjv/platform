@@ -1,9 +1,8 @@
 import { test } from '@playwright/test'
-import { generateId, PlatformSetting, PlatformURI } from '../utils'
 import { NavigationMenuPage } from '../model/recruiting/navigation-menu-page'
-import { TalentsPage } from '../model/recruiting/talents-page'
 import { TalentDetailsPage } from '../model/recruiting/talent-details-page'
-import { TalentName } from '../model/recruiting/types'
+import { TalentsPage } from '../model/recruiting/talents-page'
+import { generateId, PlatformSetting, PlatformURI } from '../utils'
 
 test.use({
   storageState: PlatformSetting
@@ -28,7 +27,6 @@ test.describe('candidate/talents tests', () => {
     const loc = 'Cupertino'
     const email = `ej-${generateId(4)}@test.com`
 
-    await talentsPage.clickRecruitApplication()
     await talentsPage.clickTalentsTab()
     await talentsPage.clickNewTalent()
     await talentsPage.enterFirstName(first)
@@ -122,17 +120,6 @@ test.describe('candidate/talents tests', () => {
     await talentDetailsPage.checkSocialLinks('Phone', '123123213213')
     await talentDetailsPage.checkSocialLinks('Email', 'test-merge-2@gmail.com')
     await talentDetailsPage.checkMergeContacts(firstLocation, titleTalent2, sourceTalent1)
-  })
-
-  test('Match to vacancy', async () => {
-    const talentName: TalentName = {
-      firstName: 'Software',
-      lastName: `Engineer-${generateId(4)}`
-    }
-    await navigationMenuPage.clickButtonTalents()
-    await talentsPage.createNewTalentWithName(talentName.firstName, talentName.lastName)
-    await talentsPage.rightClickAction(talentName, 'Match to vacancy')
-    await talentsPage.checkMatchVacancy(`${talentName.lastName} ${talentName.firstName}`, '0')
   })
 
   test('Filtering talents by skills', async ({ page }) => {

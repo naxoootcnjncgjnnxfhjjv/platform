@@ -84,6 +84,14 @@ select:-webkit-autofill:focus {
   background: transparent;
 }
 
+// Fix for iOS (disable zooming on input fields)
+@media screen and (-webkit-min-device-pixel-ratio: 0) and (max-width: 480px) { 
+  select,
+  textarea,
+  input,
+  div.ref-container div.select-text > div[contenteditable="true"] { font-size: 16px; }
+}
+
 table, caption, tbody, tfoot, thead, tr, th, td {
   margin: 0;
   padding: 0;
@@ -127,7 +135,7 @@ p:last-child { margin-block-end: 0; }
 .p-inline {
   overflow-wrap: break-word;
   word-wrap: break-word;
-  hyphens: auto;
+  // hyphens: auto;
   line-height: 150%;
 
   &.contrast { color: var(--global-primary-TextColor); }
@@ -900,6 +908,7 @@ a.no-line {
 .leading-3 { line-height: .75rem; }
 .tracking--05px { letter-spacing: -.5px; }
 .tracking-1px { letter-spacing: 1px; }
+.text-balance { text-wrap: balance; }
 
 .over-underline {
   cursor: pointer;

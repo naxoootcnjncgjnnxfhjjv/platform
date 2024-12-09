@@ -65,7 +65,7 @@
   id="sidebar"
   class="antiPanel-application vertical sidebar-container"
   class:mini
-  class:float={$deviceInfo.navigator.float}
+  class:float={$deviceInfo.aside.float}
 >
   {#if mini}
     <SidebarMini {widgets} {preferences} />
@@ -76,17 +76,21 @@
 
 <style lang="scss">
   .sidebar-container {
+    overflow: hidden;
     flex-direction: row;
     min-width: 25rem;
     border-radius: 0 var(--medium-BorderRadius) var(--medium-BorderRadius) 0;
 
     &.mini:not(.float) {
-      width: 3.5rem !important;
-      min-width: 3.5rem !important;
-      max-width: 3.5rem !important;
+      width: calc(3.5rem + 1px) !important;
+      min-width: calc(3.5rem + 1px) !important;
+      max-width: calc(3.5rem + 1px) !important;
     }
     &.mini.float {
       justify-content: flex-end;
+    }
+    &.float > :global(.sidebar-content) {
+      border-top: none;
     }
   }
   @media (max-width: 1024px) {

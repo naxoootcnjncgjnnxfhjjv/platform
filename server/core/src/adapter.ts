@@ -15,9 +15,9 @@
 
 import {
   type Class,
+  type Data,
   type Doc,
   type DocumentQuery,
-  type DocumentUpdate,
   type Domain,
   type FieldIndexConfig,
   type FindResult,
@@ -69,8 +69,7 @@ export interface DbAdapter extends LowLevelStorage {
 
   helper?: () => DomainHelperOperations
 
-  closeContext?: (ctx: MeasureContext) => Promise<void>
-
+  reserveContext?: (id: string) => () => void
   close: () => Promise<void>
   findAll: <T extends Doc>(
     ctx: MeasureContext,
@@ -82,7 +81,11 @@ export interface DbAdapter extends LowLevelStorage {
   tx: (ctx: MeasureContext, ...tx: Tx[]) => Promise<TxResult[]>
 
   // Bulk update operations
-  update: (ctx: MeasureContext, domain: Domain, operations: Map<Ref<Doc>, DocumentUpdate<Doc>>) => Promise<void>
+  update: <T extends Doc>(
+    ctx: MeasureContext,
+    domain: Domain,
+    operations: Map<Ref<Doc>, Partial<Data<T>>>
+  ) => Promise<void>
 
   // Allow to register a handler to listen for domain operations
   on?: (handler: DbAdapterHandler) => void

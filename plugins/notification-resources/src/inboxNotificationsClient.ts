@@ -63,14 +63,14 @@ export class InboxNotificationsClientImpl implements InboxNotificationsClient {
   )
 
   readonly inboxNotificationsByContext = derived(
-    [this.contexts, this.inboxNotifications],
-    ([notifyContexts, inboxNotifications]) => {
-      if (inboxNotifications.length === 0 || notifyContexts.length === 0) {
+    [this.contextById, this.inboxNotifications],
+    ([contextById, inboxNotifications]) => {
+      if (inboxNotifications.length === 0 || contextById.size === 0) {
         return new Map<Ref<DocNotifyContext>, InboxNotification[]>()
       }
 
       return inboxNotifications.reduce((result, notification) => {
-        const notifyContext = notifyContexts.find(({ _id }) => _id === notification.docNotifyContext)
+        const notifyContext = contextById.get(notification.docNotifyContext)
 
         if (notifyContext === undefined) {
           return result
@@ -167,6 +167,7 @@ export class InboxNotificationsClientImpl implements InboxNotificationsClient {
       await op.updateDoc(notification._class, notification.space, notification._id, { isViewed: true })
     }
     await op.update(docNotifyContext, { lastViewedTimestamp: Date.now() })
+    await op.commit()
   }
 
   async forceReadDoc (_id: Ref<Doc>, _class: Ref<Class<Doc>>): Promise<void> {

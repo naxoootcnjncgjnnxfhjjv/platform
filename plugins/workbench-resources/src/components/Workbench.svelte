@@ -63,7 +63,7 @@
     locationToUrl,
     mainSeparators,
     navigate,
-    openPanel,
+    showPanel,
     PanelInstance,
     Popup,
     PopupAlignment,
@@ -77,7 +77,8 @@
     setResolvedLocation,
     showPopup,
     TooltipInstance,
-    workbenchSeparators
+    workbenchSeparators,
+    resizeObserver
   } from '@hcengineering/ui'
   import view from '@hcengineering/view'
   import {
@@ -124,6 +125,8 @@
   } from '../workbench'
   import { get } from 'svelte/store'
 
+  const HIDE_NAVIGATOR = 720
+  const HIDE_ASIDE = 1024
   let contentPanel: HTMLElement
 
   const { setTheme } = getContext<{ setTheme: (theme: string) => void }>('theme')
@@ -157,13 +160,28 @@
 
   const linkProviders = client.getModel().findAllSync(view.mixin.LinkIdProvider, {})
 
-  $deviceInfo.navigator.visible = getMetadata(workbench.metadata.NavigationExpandedDefault) ?? true
-  $deviceInfo.aside.visible = getMetadata(workbench.metadata.NavigationExpandedDefault) ?? true
+  const defaultNavigator = !(getMetadata(workbench.metadata.NavigationExpandedDefault) ?? true)
+  const savedNavigator = localStorage.getItem('hiddenNavigator')
+  const savedAside = localStorage.getItem('hiddenAside')
+  let hiddenNavigator: boolean = savedNavigator !== null ? savedNavigator === 'true' : defaultNavigator
+  let hiddenAside: boolean = savedAside !== null ? savedAside === 'true' : defaultNavigator
+  $deviceInfo.navigator.visible = !hiddenNavigator
+  $deviceInfo.aside.visible = !hiddenAside
+  sidebarStore.subscribe((sidebar) => {
+    if (!$deviceInfo.aside.float) {
+      hiddenAside = sidebar.variant === SidebarVariant.MINI
+      localStorage.setItem('hiddenAside', `${hiddenAside}`)
+    }
+  })
 
   async function toggleNav (): Promise<void> {
     $deviceInfo.navigator.visible = !$deviceInfo.navigator.visible
+    if (!$deviceInfo.navigator.float) {
+      hiddenNavigator = !$deviceInfo.navigator.visible
+      localStorage.setItem('hiddenNavigator', `${hiddenNavigator}`)
+    }
     closeTooltip()
-    if (currentApplication && navigatorModel && navigator) {
+    if (currentApplication && navigatorModel) {
       await tick()
       panelInstance.fitPopupInstance()
       popupInstance.fitPopupInstance()
@@ -400,7 +418,6 @@
         const prevTabLoc = prevTab ? getTabLocation(prevTab) : undefined
         if (prevTabLoc === undefined || prevTabLoc.path[2] !== loc.path[2]) {
           clear(1)
-          clear(2)
         }
       }
       prevTabIdStore.set($tabIdStore)
@@ -528,12 +545,13 @@
           provider,
           focus: doc
         })
-        openPanel(
+        showPanel(
           props[0] as AnyComponent,
           _id,
           _class,
           (props[3] ?? undefined) as PopupAlignment,
-          (props[4] ?? undefined) as AnyComponent
+          (props[4] ?? undefined) as AnyComponent,
+          false
         )
       } else {
         accessDeniedStore.set(true)
@@ -631,21 +649,28 @@
 
   let aside: HTMLElement
   let cover: HTMLElement
+  let workbenchWidth: number = $deviceInfo.docWidth
 
-  $deviceInfo.navigator.float = !($deviceInfo.docWidth < 1024)
-  $: if ($deviceInfo.docWidth <= 1024 && !$deviceInfo.navigator.float) {
-    $deviceInfo.navigator.visible = false
-    $deviceInfo.navigator.float = true
-    $deviceInfo.aside.visible = false
-  } else if ($deviceInfo.docWidth > 1024 && $deviceInfo.navigator.float) {
-    if (getMetadata(workbench.metadata.NavigationExpandedDefault) === undefined) {
+  $deviceInfo.navigator.float = workbenchWidth <= HIDE_NAVIGATOR
+  const checkWorkbenchWidth = (): void => {
+    if (workbenchWidth <= HIDE_NAVIGATOR && !$deviceInfo.navigator.float) {
+      $deviceInfo.navigator.visible = false
+      $deviceInfo.navigator.float = true
+    } else if (workbenchWidth > HIDE_NAVIGATOR && $deviceInfo.navigator.float) {
       $deviceInfo.navigator.float = false
-      $deviceInfo.navigator.visible = true
-      $deviceInfo.aside.visible = true
+      $deviceInfo.navigator.visible = !hiddenNavigator
     }
   }
+  checkWorkbenchWidth()
+  $: if ($deviceInfo.docWidth <= HIDE_ASIDE && !$deviceInfo.aside.float) {
+    $deviceInfo.aside.visible = false
+    $deviceInfo.aside.float = true
+  } else if ($deviceInfo.docWidth > HIDE_ASIDE && $deviceInfo.aside.float) {
+    $deviceInfo.aside.float = false
+    $deviceInfo.aside.visible = !hiddenAside
+  }
   const checkOnHide = (): void => {
-    if ($deviceInfo.navigator.visible && $deviceInfo.docWidth <= 1024) $deviceInfo.navigator.visible = false
+    if ($deviceInfo.navigator.visible && $deviceInfo.navigator.float) $deviceInfo.navigator.visible = false
   }
   let oldNavVisible: boolean = $deviceInfo.navigator.visible
   let oldASideVisible: boolean = $deviceInfo.aside.visible
@@ -730,7 +755,7 @@
   defineSeparators('workbench', workbenchSeparators)
   defineSeparators('main', mainSeparators)
 
-  $: mainNavigator = currentApplication && navigatorModel && navigator && $deviceInfo.navigator.visible
+  $: mainNavigator = currentApplication && navigatorModel && $deviceInfo.navigator.visible
   $: elementPanel = $deviceInfo.replacedPanel ?? contentPanel
 
   $: deactivated =
@@ -806,14 +831,22 @@
           />
         </div>
         <!-- <ActivityStatus status="active" /> -->
-        <NavLink app={notificationId} shrink={0}>
+        <NavLink
+          app={notificationId}
+          shrink={0}
+          disabled={!$deviceInfo.navigator.visible && $deviceInfo.navigator.float && currentAppAlias === notificationId}
+        >
           <AppItem
             icon={notification.icon.Notifications}
             label={notification.string.Inbox}
             selected={currentAppAlias === notificationId || inboxPopup !== undefined}
+            navigator={(currentAppAlias === notificationId || inboxPopup !== undefined) &&
+              $deviceInfo.navigator.visible}
             on:click={(e) => {
               if (e.metaKey || e.ctrlKey) return
-              if (currentAppAlias === notificationId && lastLoc !== undefined) {
+              if (!$deviceInfo.navigator.visible && $deviceInfo.navigator.float && currentAppAlias === notificationId) {
+                toggleNav()
+              } else if (currentAppAlias === notificationId && lastLoc !== undefined) {
                 e.preventDefault()
                 e.stopPropagation()
                 navigate(lastLoc)
@@ -825,7 +858,12 @@
             notify={hasInboxNotifications}
           />
         </NavLink>
-        <Applications {apps} active={currentApplication?._id} direction={$deviceInfo.navigator.direction} />
+        <Applications
+          {apps}
+          active={currentApplication?._id}
+          direction={$deviceInfo.navigator.direction}
+          on:toggleNav={toggleNav}
+        />
       </div>
       <div
         class="info-box {$deviceInfo.navigator.direction}"
@@ -889,17 +927,25 @@
         application: currentApplication?._id
       }}
     />
-    <div class="workbench-container inner" class:rounded={$sidebarStore.variant === SidebarVariant.EXPANDED}>
+    <div
+      class="workbench-container inner"
+      class:rounded={$sidebarStore.variant === SidebarVariant.EXPANDED}
+      use:resizeObserver={(element) => {
+        workbenchWidth = element.clientWidth
+        checkWorkbenchWidth()
+      }}
+    >
+      <!-- svelte-ignore a11y-click-events-have-key-events -->
+      <!-- svelte-ignore a11y-no-static-element-interactions -->
+      {#if $deviceInfo.navigator.float && $deviceInfo.navigator.visible}
+        <div class="cover shown" on:click={() => ($deviceInfo.navigator.visible = false)} />
+      {/if}
       {#if mainNavigator}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        {#if $deviceInfo.navigator.float}
-          <div class="cover shown" on:click={() => ($deviceInfo.navigator.visible = false)} />
-        {/if}
         <div
           class="antiPanel-navigator no-print {$deviceInfo.navigator.direction === 'horizontal'
             ? 'portrait'
             : 'landscape'} border-left"
+          class:fly={$deviceInfo.navigator.float}
         >
           <div class="antiPanel-wrap__content hulyNavPanel-container">
             {#if currentApplication}
@@ -964,7 +1010,13 @@
         {:else if specialComponent}
           <Component
             is={specialComponent.component}
-            props={{ model: navigatorModel, ...specialComponent.componentProps, currentSpace }}
+            props={{
+              model: navigatorModel,
+              ...specialComponent.componentProps,
+              currentSpace,
+              space: currentSpace,
+              navigationModel: specialComponent?.navigationModel
+            }}
             on:action={(e) => {
               if (e?.detail) {
                 const loc = getCurrentLocation()
@@ -990,7 +1042,7 @@
         </div>
       {/if}
     </div>
-    {#if !$deviceInfo.navigator.float}
+    {#if !$deviceInfo.aside.float}
       {#if $sidebarStore.variant === SidebarVariant.EXPANDED}
         <Separator name={'main'} index={0} color={'transparent'} separatorSize={0} short />
       {/if}
@@ -998,10 +1050,9 @@
     {/if}
   </div>
   <Dock />
-  <div bind:this={cover} class="cover" />
-  {#if $deviceInfo.navigator.float}
+  {#if $deviceInfo.aside.float}
     <div
-      class="antiPanel-navigator right no-print {$deviceInfo.navigator.direction === 'horizontal'
+      class="antiPanel-navigator right fly no-print {$deviceInfo.navigator.direction === 'horizontal'
         ? 'portrait'
         : 'landscape'}"
       style:display={$deviceInfo.aside.visible ? 'flex' : 'none'}
@@ -1012,6 +1063,7 @@
       </div>
     </div>
   {/if}
+  <div bind:this={cover} class="cover" />
   <TooltipInstance />
   <PanelInstance bind:this={panelInstance} contentPanel={elementPanel}>
     <svelte:fragment slot="panel-header">
@@ -1055,7 +1107,11 @@
       border-radius: var(--medium-BorderRadius);
       pointer-events: none;
     }
-    .antiPanel-application {
+    .antiPanel-application.horizontal {
+      border-radius: 0 0 var(--medium-BorderRadius) var(--medium-BorderRadius);
+      border-top: none;
+    }
+    .antiPanel-application:not(.horizontal) {
       border-radius: var(--medium-BorderRadius) 0 0 var(--medium-BorderRadius);
       border-right: none;
     }

@@ -76,6 +76,7 @@ export interface Widget extends Doc {
 
   component: AnyComponent
   tabComponent?: AnyComponent
+  switcherComponent?: AnyComponent
   headerLabel?: IntlString
 
   closeIfNoTabs?: boolean
@@ -89,15 +90,16 @@ export interface WidgetPreference extends Preference {
 export interface WidgetTab {
   id: string
   name?: string
+  label?: IntlString
   icon?: Asset | AnySvelteComponent
   iconComponent?: AnyComponent
   iconProps?: Record<string, any>
-  widget?: Ref<Widget>
   isPinned?: boolean
   allowedPath?: string
   objectId?: Ref<Doc>
   objectClass?: Ref<Class<Doc>>
   data?: Record<string, any>
+  readonly?: boolean
 }
 
 export enum SidebarEvent {
@@ -183,6 +185,22 @@ export interface SpecialNavModel {
   notificationsCountProvider?: Resource<
   (inboxNotificationsByContext: Map<Ref<DocNotifyContext>, InboxNotification[]>) => number
   >
+  navigationModel?: ParentsNavigationModel
+}
+
+/**
+ * @public
+ */
+export interface ParentsNavigationModel {
+  navigationComponent: AnyComponent
+  navigationComponentLabel: IntlString
+  navigationComponentIcon?: Asset
+  mainComponentLabel: IntlString
+  mainComponentIcon?: Asset
+  navigationComponentProps?: Record<string, any>
+  syncWithLocationQuery?: boolean
+  createComponent?: AnyComponent
+  createComponentProps?: Record<string, any>
 }
 
 /**
@@ -238,7 +256,8 @@ export default plugin(workbenchId, {
     UpgradeDownloadProgress: '' as IntlString,
     OpenInSidebar: '' as IntlString,
     OpenInSidebarNewTab: '' as IntlString,
-    ConfigureWidgets: '' as IntlString
+    ConfigureWidgets: '' as IntlString,
+    WorkspaceIsArchived: '' as IntlString
   },
   icon: {
     Search: '' as Asset
@@ -263,6 +282,7 @@ export default plugin(workbenchId, {
   function: {
     CreateWidgetTab: '' as Resource<(widget: Widget, tab: WidgetTab, newTab: boolean) => Promise<void>>,
     CloseWidgetTab: '' as Resource<(widget: Widget, tab: string) => Promise<void>>,
+    CloseWidget: '' as Resource<(widget: Ref<Widget>) => Promise<void>>,
     GetSidebarObject: '' as Resource<() => Partial<Pick<Doc, '_id' | '_class'>>>
   },
   actionImpl: {

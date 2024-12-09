@@ -24,6 +24,7 @@ import { importNotion } from './notion/notion'
 import { setMetadata } from '@hcengineering/platform'
 import { FrontFileUploader, type FileUploader } from './importer/uploader'
 import { ClickupImporter } from './clickup/clickup'
+import { UnifiedFormatImporter } from './huly/unified'
 
 /**
  * @public
@@ -78,7 +79,7 @@ export function importTool (): void {
       return
     }
     const client = new TxOperations(connection, acc._id)
-    const fileUploader = new FrontFileUploader(getFrontUrl(), selectedWs.token)
+    const fileUploader = new FrontFileUploader(getFrontUrl(), selectedWs.workspaceId, selectedWs.token)
     try {
       await f(client, fileUploader)
     } catch (err: any) {
@@ -128,6 +129,21 @@ export function importTool (): void {
       await authorize(user, password, workspace, async (client, uploader) => {
         const importer = new ClickupImporter(client, uploader)
         await importer.importClickUpTasks(file)
+      })
+    })
+
+  // import /home/anna/xored/huly/platform/dev/import-tool/src/huly/example-workspace --workspace ws1 --user user1 --password 1234
+  program
+    .command('import <dir>')
+    .description('import issues in Unified Huly Format')
+    .requiredOption('-u, --user <user>', 'user')
+    .requiredOption('-pw, --password <password>', 'password')
+    .requiredOption('-ws, --workspace <workspace>', 'workspace url where the documents should be imported to')
+    .action(async (dir: string, cmd) => {
+      const { workspace, user, password } = cmd
+      await authorize(user, password, workspace, async (client, uploader) => {
+        const importer = new UnifiedFormatImporter(client, uploader)
+        await importer.importFolder(dir)
       })
     })
 

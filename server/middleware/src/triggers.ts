@@ -22,18 +22,17 @@ import core, {
   DOMAIN_MODEL,
   type Doc,
   type DocumentUpdate,
+  type LowLevelStorage,
   type MeasureContext,
   type Mixin,
   type Ref,
   type SessionData,
   type Tx,
-  type TxCollectionCUD,
+  TxCUD,
   TxFactory,
-  TxProcessor,
   type TxRemoveDoc,
   type TxUpdateDoc,
   addOperation,
-  generateId,
   toFindResult,
   withContext
 } from '@hcengineering/core'
@@ -49,6 +48,7 @@ import type {
   TxMiddlewareResult
 } from '@hcengineering/server-core'
 import serverCore, { BaseMiddleware, SessionDataImpl, SessionFindAll, Triggers } from '@hcengineering/server-core'
+import { filterBroadcastOnly } from './utils'
 
 /**
  * @public
@@ -85,6 +85,9 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
     if (this.context.storageAdapter == null) {
       throw new PlatformError(unknownError('Storage adapter should be specified'))
     }
+    if (this.context.lowLevelStorage == null) {
+      throw new PlatformError(unknownError('Low level storage should be specified'))
+    }
     this.storageAdapter = this.context.storageAdapter
     this.triggers.init(this.context.modelDb)
   }
@@ -92,7 +95,11 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
   async tx (ctx: MeasureContext, tx: Tx[]): Promise<TxMiddlewareResult> {
     await this.triggers.tx(tx)
     const result = await this.provideTx(ctx, tx)
-    await this.processDerived(ctx, tx)
+
+    const ftx = filterBroadcastOnly(tx, this.context.hierarchy)
+    if (ftx.length > 0) {
+      await this.processDerived(ctx, ftx)
+    }
     return result
   }
 
@@ -104,6 +111,7 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
         _ctx.contextData.isTriggerCtx = true
       }
 
+      // Use live query
       const results = await this.findAll(_ctx, _class, query, options)
       return toFindResult(
         results.map((v) => {
@@ -112,6 +120,7 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
         results.total
       )
     }
+
     const removed = await ctx.with('process-remove', {}, (ctx) => this.processRemove(ctx, txes, findAll))
     const collections = await ctx.with('process-collection', {}, (ctx) => this.processCollection(ctx, txes, findAll))
     const moves = await ctx.with('process-move', {}, (ctx) => this.processMove(ctx, txes, findAll))
@@ -119,6 +128,7 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
     const triggerControl: Omit<TriggerControl, 'txFactory' | 'ctx' | 'txes'> = {
       removedMap: ctx.contextData.removedMap,
       workspace: this.context.workspace,
+      lowLevel: this.context.lowLevelStorage as LowLevelStorage,
       branding: this.context.branding,
       storageAdapter: this.storageAdapter,
       serviceAdaptersManager: this.context.serviceAdapterManager as ServiceAdaptersManager,
@@ -159,15 +169,18 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
       await this.processDerivedTxes(ctx, derived)
     }
 
-    const asyncProcess = this.processAsyncTriggers(ctx, triggerControl, findAll, txes, triggers)
-    // In case of async context, we execute both async and sync triggers as sync
+    const performSync = (ctx as MeasureContext<SessionDataImpl>).contextData.isAsyncContext ?? false
 
-    if ((ctx as MeasureContext<SessionDataImpl>).contextData.isAsyncContext ?? false) {
-      await asyncProcess
+    if (performSync) {
+      await this.processAsyncTriggers(ctx, triggerControl, findAll, txes, triggers)
     } else {
-      asyncProcess.catch((err) => {
-        ctx.error('error during processing async triggers', { err })
-      })
+      ctx.contextData.asyncRequests = [
+        ...(ctx.contextData.asyncRequests ?? []),
+        async () => {
+          // In case of async context, we execute both async and sync triggers as sync
+          await this.processAsyncTriggers(ctx, triggerControl, findAll, txes, triggers)
+        }
+      ]
     }
   }
 
@@ -226,14 +239,10 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
     )
 
     if (aresult.length > 0) {
-      await ctx.with('process-aync-result', {}, async (ctx) => {
-        ctx.id = generateId()
+      await ctx.with('process-async-result', {}, async (ctx) => {
         await this.processDerivedTxes(ctx, aresult)
         // We need to send all to recipients
         await this.context.head?.handleBroadcast(ctx)
-        if (ctx.onEnd !== undefined) {
-          await ctx.onEnd(ctx)
-        }
       })
     }
   }
@@ -246,14 +255,14 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
     }
   }
 
-  private async getCollectionUpdateTx<D extends Doc>(
+  private getCollectionUpdateTx<D extends Doc>(
     _id: Ref<D>,
     _class: Ref<Class<D>>,
     modifiedBy: Ref<Account>,
     modifiedOn: number,
     attachedTo: Pick<Doc, '_class' | 'space'>,
     update: DocumentUpdate<D>
-  ): Promise<Tx> {
+  ): Tx {
     const txFactory = new TxFactory(modifiedBy, true)
     const baseClass = this.context.hierarchy.getBaseClass(_class)
     if (baseClass !== _class) {
@@ -274,11 +283,10 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
     const result: Tx[] = []
 
     for (const tx of txes) {
-      const actualTx = TxProcessor.extractTx(tx)
-      if (!this.context.hierarchy.isDerived(actualTx._class, core.class.TxRemoveDoc)) {
+      if (!this.context.hierarchy.isDerived(tx._class, core.class.TxRemoveDoc)) {
         continue
       }
-      const rtx = actualTx as TxRemoveDoc<Doc>
+      const rtx = tx as TxRemoveDoc<Doc>
       const object = ctx.contextData.removedMap.get(rtx.objectId)
       if (object === undefined) {
         continue
@@ -315,18 +323,20 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
     return result
   }
 
-  private async updateCollection (ctx: MeasureContext, tx: Tx, findAll: SessionFindAll): Promise<Tx[]> {
-    if (tx._class !== core.class.TxCollectionCUD) {
+  private async updateCollection (
+    ctx: MeasureContext,
+    colTx: TxUpdateDoc<AttachedDoc>,
+    findAll: SessionFindAll
+  ): Promise<Tx[]> {
+    if (colTx.attachedTo === undefined || colTx.attachedToClass === undefined || colTx.collection === undefined) {
       return []
     }
 
-    const colTx = tx as TxCollectionCUD<Doc, AttachedDoc>
-    const _id = colTx.objectId
-    const _class = colTx.objectClass
-    const { operations } = colTx.tx as TxUpdateDoc<AttachedDoc>
+    const _id = colTx.attachedTo
+    const _class = colTx.attachedToClass
+    const { operations } = colTx
 
     if (
-      colTx.tx._class !== core.class.TxUpdateDoc ||
       this.context.hierarchy.getDomain(_class) === DOMAIN_MODEL // We could not update increments for model classes
     ) {
       return []
@@ -342,7 +352,7 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
       const attr = this.context.hierarchy.findAttribute(oldAttachedTo._class, colTx.collection)
 
       if (attr !== undefined) {
-        oldTx = await this.getCollectionUpdateTx(_id, _class, tx.modifiedBy, colTx.modifiedOn, oldAttachedTo, {
+        oldTx = this.getCollectionUpdateTx(_id, _class, colTx.modifiedBy, colTx.modifiedOn, oldAttachedTo, {
           $inc: { [colTx.collection]: -1 }
         })
       }
@@ -354,10 +364,10 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
     let newTx: Tx | null = null
     const newAttr = this.context.hierarchy.findAttribute(newAttachedToClass, newAttachedToCollection)
     if (newAttachedTo !== undefined && newAttr !== undefined) {
-      newTx = await this.getCollectionUpdateTx(
+      newTx = this.getCollectionUpdateTx(
         newAttachedTo._id,
         newAttachedTo._class,
-        tx.modifiedBy,
+        colTx.modifiedBy,
         colTx.modifiedOn,
         newAttachedTo,
         { $inc: { [newAttachedToCollection]: 1 } }
@@ -374,10 +384,10 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
   ): Promise<Tx[]> {
     const result: Tx[] = []
     for (const tx of txes) {
-      if (tx._class === core.class.TxCollectionCUD) {
-        const colTx = tx as TxCollectionCUD<Doc, AttachedDoc>
-        const _id = colTx.objectId
-        const _class = colTx.objectClass
+      const colTx = tx as TxCUD<AttachedDoc>
+      if (colTx.attachedTo !== undefined && colTx.attachedToClass !== undefined && colTx.collection !== undefined) {
+        const _id = colTx.attachedTo
+        const _class = colTx.attachedToClass
 
         // Skip model operations
         if (this.context.hierarchy.getDomain(_class) === DOMAIN_MODEL) {
@@ -385,11 +395,11 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
           continue
         }
 
-        const isCreateTx = colTx.tx._class === core.class.TxCreateDoc
-        const isDeleteTx = colTx.tx._class === core.class.TxRemoveDoc
-        const isUpdateTx = colTx.tx._class === core.class.TxUpdateDoc
+        const isCreateTx = colTx._class === core.class.TxCreateDoc
+        const isDeleteTx = colTx._class === core.class.TxRemoveDoc
+        const isUpdateTx = colTx._class === core.class.TxUpdateDoc
         if (isUpdateTx) {
-          result.push(...(await this.updateCollection(ctx, tx, findAll)))
+          result.push(...(await this.updateCollection(ctx, colTx as TxUpdateDoc<AttachedDoc>, findAll)))
         }
 
         if ((isCreateTx || isDeleteTx) && !ctx.contextData.removedMap.has(_id)) {
@@ -398,7 +408,7 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
           const attachedTo = (await findAll(ctx, _class, { _id }, { limit: 1 }))[0]
           if (attachedTo !== undefined) {
             result.push(
-              await this.getCollectionUpdateTx(
+              this.getCollectionUpdateTx(
                 _id,
                 _class,
                 tx.modifiedBy,
@@ -475,8 +485,8 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
         serverCore.mixin.ObjectDDParticipant
       )
       const collector = await getResource(removeParticipand.collectDocs)
-      const docs = await collector(object, this.context.hierarchy, async (_class, query, options) => {
-        return await findAll(ctx, _class, query, options)
+      const docs = await collector(object, this.context.hierarchy, (_class, query, options) => {
+        return findAll(ctx, _class, query, options)
       })
       for (const d of docs) {
         result.push(...this.deleteObject(ctx, d, ctx.contextData.removedMap))
@@ -488,11 +498,10 @@ export class TriggersMiddleware extends BaseMiddleware implements Middleware {
   private async processMove (ctx: MeasureContext, txes: Tx[], findAll: SessionFindAll): Promise<Tx[]> {
     const result: Tx[] = []
     for (const tx of txes) {
-      const actualTx = TxProcessor.extractTx(tx)
-      if (!this.context.hierarchy.isDerived(actualTx._class, core.class.TxUpdateDoc)) {
+      if (!this.context.hierarchy.isDerived(tx._class, core.class.TxUpdateDoc)) {
         continue
       }
-      const rtx = actualTx as TxUpdateDoc<Doc>
+      const rtx = tx as TxUpdateDoc<Doc>
       if (rtx.operations.space === undefined || rtx.operations.space === rtx.objectSpace) {
         continue
       }
